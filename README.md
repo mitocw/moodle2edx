@@ -11,3 +11,9 @@ content.
 The key tool used in this construction is abox.py -- a generic object
 for "answer boxes", which abstracts away the capa problem types used
 in the edX system.
+
+Note that the abox.py file in this repo is a very recent version (the
+same file is used by latex2edx; see https://github.com/mitocw/latex2edx).
+The moodle2edx.py script may need to be updated to work properly with
+this version of abox.py.
+
