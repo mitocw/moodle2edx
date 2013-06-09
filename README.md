@@ -17,3 +17,7 @@ same file is used by latex2edx; see https://github.com/mitocw/latex2edx).
 The moodle2edx.py script may need to be updated to work properly with
 this version of abox.py.
 
+Another useful step would be to use xbundle
+(https://github.com/mitocw/xbundle), so that instead of creating a bunch
+of separate XML files, moodle2edx could create just one large XML file
+with the entire set of course content.  
