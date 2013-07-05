@@ -21,3 +21,6 @@ Another useful step would be to use xbundle
 (https://github.com/mitocw/xbundle), so that instead of creating a bunch
 of separate XML files, moodle2edx could create just one large XML file
 with the entire set of course content.  
+
+The is an "alpha" distribution. No support is available. The only available 
+documentation is that which is in the source code.  Contributions are welcome.
