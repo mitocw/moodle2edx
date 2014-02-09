@@ -66,3 +66,6 @@ Acknowledgements
 The sample moodle backup file used for testing (testdat/intro_to_stats.mbz)
 is from http://moodleshare.org/course/view.php?id=213
 
+The abox.py code used for problem converstion is from 
+
+  https://github.com/mitocw/latex2edx
