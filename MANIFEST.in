@@ -1,0 +1,4 @@
+include moodle2edx/*.py
+include moodle2edx/test/*.py
+include moodle2edx/testdat/*
+
