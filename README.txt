@@ -43,6 +43,18 @@ Options:
   -s SEMESTER, --semester=SEMESTER
                         semester to use for edX course (no spaces)
 
+Examples
+========
+
+* https://github.com/mitocw/content-ocw-explore-engineering
+* https://github.com/mitocw/content-ocw-intro-to-stats
+
+As can be seen from these examples, moodle2edx provides a functional way to get
+pages from moodle into edX.  The locations of the content are sub-ideal, but
+provide a working starting point for editing using edX Studio.  Translation
+of moodle assessments into edX problems is mostly incomplete.
+
+
 History
 =======
 
