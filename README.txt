@@ -1,3 +1,5 @@
+** THIS REPOSITORY IS CURRENTLY UNSUPPORTED **
+
 ==========
 moodle2edx
 ==========
