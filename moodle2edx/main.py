@@ -13,7 +13,10 @@ import tempfile
 from StringIO import StringIO
 from lxml import etree
 from abox import AnswerBox
-from path import path
+try:
+    from path import path
+except:
+    from path import Path as path
 #import xml.sax.saxutils as saxutils
 import cgi
 import html2text
@@ -370,7 +373,10 @@ class Moodle2Edx(object):
         seq.set('name',name)
         # TODO: import intro, do points
         for qinst in qxml.findall('.//question_instance'):
-            qnum = qinst.find('question').text
+            questions = qinst.find('question')
+            if not questions:
+                continue
+            qnum = questions.text
             question = qdict[qnum]
             vert = etree.SubElement(seq,'vertical')	# one problem in each vertical
             problem = etree.SubElement(vert,'problem')
