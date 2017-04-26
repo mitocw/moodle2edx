@@ -10,7 +10,7 @@ fix_multichoice_images = function(){
 	    var fp = m[1];
 	    var new_fp = static_path + fp;
 	    console.log("mapping ", txt, " to ", new_fp);
-	    $(elem).find("text").html("<img src='" + new_fp + "'/>");
+	    $(elem).find("text").html(String.fromCharCode(60) + "img src='" + new_fp + "'/" + String.fromCharCode(62));
 	}
     });
 }
