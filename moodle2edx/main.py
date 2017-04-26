@@ -10,16 +10,19 @@ import os, sys, string, re
 import optparse
 import codecs
 import tempfile
-from StringIO import StringIO
-from lxml import etree
-from abox import AnswerBox
+import cgi
+import html2text
+import lxml.html
 try:
     from path import path
 except:
     from path import Path as path
-#import xml.sax.saxutils as saxutils
-import cgi
-import html2text
+
+from collections import defaultdict
+from unidecode import unidecode
+from StringIO import StringIO
+from lxml import etree
+from abox import AnswerBox
 
 html2text.IGNORE_EMPHASIS=True
 
@@ -30,7 +33,8 @@ class Moodle2Edx(object):
     Python class for converting moodle backup files to edX XML course format
     '''
 
-    def __init__(self, infn, edxdir='.', org="UnivX", semester="2014_Spring", verbose=False, clean_up_html=True):
+    def __init__(self, infn, edxdir='.', org="UnivX", semester="2014_Spring", verbose=False,
+                 clean_up_html=True, skip_static=False):
         if infn.endswith('.mbz'):
             # import gzip, tarfile
             # dir = tarfile.TarFile(fileobj=gzip.open(infn))
@@ -51,6 +55,8 @@ class Moodle2Edx(object):
         self.edxdir = path(edxdir)
         self.moodle_dir = path(mdir)
         self.clean_up_html = clean_up_html
+        self.contextid = None			# used by moodle lessons
+        self.contextid_sfcnt = defaultdict(int)	# file counter for current context
 
         if not self.edxdir.exists():
             os.mkdir(self.edxdir)
@@ -67,7 +73,8 @@ class Moodle2Edx(object):
         qfn = 'questions.xml'	# moodle questions xml
     
         qdict = self.load_questions(mdir,qfn)
-        self.convert_static_files()
+        if not skip_static:
+            self.convert_static_files()
     
         moodx = etree.parse('%s/%s' % (mdir,mfn))
     
@@ -114,24 +121,37 @@ class Moodle2Edx(object):
 
         Construct dictionary of files by id, with values as static link urls.
 
+        Use self.files_saved as list of all unique filenames saved (make unique to avoid collisions)
+
         Save that dictionary as self.staticfiles
+        Also create self.files_by_context
         '''
-        self.staticfiles = {}
+        self.staticfiles = {}				# keys = file_id, values = {'url': edX static path url, 'fname': original file name}
+        self.files_by_context = defaultdict(lambda: defaultdict(list))	# keys = contextid, values = {filename: [file_id, file_id, ...]}
+        self.files_saved = []				# list of 
         fxml = etree.parse(self.moodle_dir / 'files.xml').getroot()
         if self.verbose:
             print "==== Copying static files"
         for mfile in fxml.findall('file'):
             fhash = mfile.find('contenthash').text
             ftype = mfile.find('mimetype').text
+            contextid = mfile.find('contextid').text
             fname = mfile.find('filename').text	    # instructor supplied filename
             if fname=='.':
                 # print "    strange filename '.', skipping..."
                 continue
-            fname2 = fname.replace(' ', '_')
+            ufname = fname.replace(' ', '_')
+            sfcnt = 0
+            static_fname = '%s_%02d_%s' % (contextid, sfcnt, ufname)	# make unique using contextid and sfcnt
+            while static_fname in self.files_saved:			# absolutely ensure unique static filename
+                sfcnt += 1
+                static_fname = '%s_%02d_%s' % (contextid, sfcnt, ufname)
+            self.files_saved.append(static_fname)
             fileid = mfile.get('id')
-            url = '/static/%s' % fname2
-            self.staticfiles[fileid] = (url, fname)
-            os.system('cp %s/files/%s/%s "%s/static/%s"' % (self.moodle_dir, fhash[:2], fhash, self.edxdir, fname2))
+            url = '/static/%s' % static_fname
+            self.staticfiles[fileid] = {'url': url, 'fname': fname}
+            self.files_by_context[contextid][fname].append(fileid)
+            os.system('cp %s/files/%s/%s "%s/static/%s"' % (self.moodle_dir, fhash[:2], fhash, self.edxdir, static_fname))
             if self.verbose:
                 print "      %s" % fname
                 sys.stdout.flush()
@@ -231,6 +251,11 @@ class Moodle2Edx(object):
             print "  --> etext %s (%s)" % (title,adir)
             seq, vert = self.new_sequential(chapter, title)
             vert = self.import_page(adir, seq)
+
+        elif category=='lesson':
+            print "  --> lesson %s (%s)" % (title,adir)
+            seq, vert = self.new_sequential(chapter, title)
+            self.import_moodle_lesson(adir, seq)
     
         elif category=='quiz':
             if seq is None:		# use current sequential if exists, else create new one
@@ -286,6 +311,13 @@ class Moodle2Edx(object):
         return self.get_moodle_page_by_dir(adir)
 
     def get_moodle_page_by_dir(self, adir, fn='page.xml'):
+        '''
+        Load moodle XML file in the specified activity directory.
+        Also create a unique edX format url_name for the page, and try to extract
+        the page resource name from the XML.
+
+        Return XML root, url_name, and page resource name.
+        '''
         pxml = etree.parse('%s/%s/%s' % (self.moodle_dir, adir, fn)).getroot()
         name = pxml.find('.//name').text.strip().split('\n')[0].strip()
         fnpre = os.path.basename(adir) + '__' + name.replace(' ','_').replace('/','_')
@@ -314,10 +346,154 @@ class Moodle2Edx(object):
         htmlstr = '<h2>%s</h2>' % cgi.escape(name)
         for fileid in xml.findall('.//id'):
             fidnum = fileid.text
-            (url, filename) = self.staticfiles.get(fidnum, ('',''))
+            sf = self.staticfiles.get(fidnum, {'url': '', 'fname': ''})
+            url = sf['url']
+            filename = sf['fname']
             # print "fileid: %s -> %s" % (fidnum, self.staticfiles.get(fidnum))
             htmlstr += '<p><a href="%s">%s</a></p>' % (url, filename)
         return self.save_as_html(url_name, name, htmlstr, vert=vert)
+
+    def import_moodle_lesson(self, adir, seq):
+        '''
+        Import moodle "lesson" - a single vertical with a bunch of page elements.
+        Each <page> in the lesson is turned into the appropriate edX xblock, e.g. 
+        video, problem, html, ... based on the <qtype> of the page.
+
+        - adir: directory containing activity
+        - seq: sequential etree element 
+        '''
+        pxml, url_name, name = self.get_moodle_page_by_dir(adir, 'lesson.xml')
+        activity = pxml
+        self.contextid = activity.get('contextid')	# context ID used for looking up @@PLUGINFILE@@
+        self.contextid_sfcnt = defaultdict(int)		# reset file counter for the context (key=fname, val=sfcnt)
+        moduleid = activity.get('moduleid')
+        vert = etree.SubElement(seq,'vertical')		# new vertical
+        vert.set('display_name', name)
+        vert.set('module_id', moduleid)			# nonstandard edX XML
+        vert.set('context_id', self.contextid)		# nonstandard edX XML
+
+        for page in pxml.findall('.//page'):
+            qtype = page.find('.//qtype').text
+            title = page.find('.//title').text
+            if qtype=='20':	# video
+                self.import_moodle_lesson_video(vert, page)
+            elif qtype=='3':	# multiple choice problem
+                self.import_moodle_lesson_multichoice_problem(vert, page)
+            else:
+                print "          In lesson %s, unknown page qtype=%s, title=%s" % (name, qtype, title)
+
+    def parse_and_clean_up_html(self, htmlstr):
+        '''
+        Parse (possibly broken) html and return etree representation of it.
+        Check for @@PLUGINFILE@@ and replace with proper static file path.
+        '''
+        xhtml = lxml.html.fromstring(htmlstr)
+        for img in xhtml.findall('.//img'):
+            src = img.get('src')
+            if not src:
+                continue
+            if 'file://' in src:
+                print "         Broken image %s, removing" % etree.tostring(img)
+                img.getparent().remove(img)
+                continue
+            if src.startswith('@@PLUGINFILE@@'):
+                fname = src.split('/', 1)[1]
+                fileid_list = self.files_by_context.get(self.contextid, {}).get(fname)
+                if not fileid_list:
+                    print "         Missing image file %s (contextid=%s)" % (src, contextid)
+                    continue
+                sfcnt = self.contextid_sfcnt[fname]
+                if not len(fileid_list) > sfcnt:
+                    print "         Missing image file %s (contextid=%s, sfcnt=%s)" % (src, contextid, sfcnt)
+                    continue
+                fileid = fileid_list[sfcnt]
+                url = self.staticfiles[fileid]['url']
+                img.set('src', url)
+                self.contextid_sfcnt[fname] = sfcnt + 1	# next time the next file (of the same filename) will be used
+                
+        return xhtml
+
+    def import_moodle_lesson_multichoice_problem(self, vert, page):
+        '''
+        Import a multiple choice problem from a moodle lesson.
+        '''
+        title = page.find('.//title').text
+        title = html2text.html2text(title)
+        title = title.strip()
+        contents = page.find('.//contents').text
+
+        if len(title) > 60:
+            display_name = title.split('. ')[0]
+            if len(display_name) < 2:
+                display_name += ".  " + title.split('. ')[1]
+        else:
+            display_name = title
+
+        problem = etree.SubElement(vert, "problem")
+        url_name = self.make_url_name(title);
+        problem.set("display_name", display_name)
+        problem.set("url_name", url_name)
+
+        problem_html = self.parse_and_clean_up_html(contents)
+        problem.append(problem_html)
+
+        options = []
+        expect = ""
+        for answer in page.findall('.//answer'):
+            op = answer.find('answer_text').text
+            op = html2text.html2text(op)
+            op = op.replace('\n', '')
+            op = op.strip()
+            op = unidecode(op)
+            op = op.replace('&nbsp_place_holder;', ' ')
+            op = op.replace(' & ', ' and ')
+            op = op.replace(' < ', ' &#60; ')
+            op = op.replace(' > ', ' &#62; ')
+            op = op.strip()
+            # op = op.replace(u'\xa0',' ')
+            options.append(op)
+            if float(answer.find('score').text)==1.0:
+                expect = str(op)
+        optionstr = ','.join(['"%s"' % x.replace('"',"'") for x in options])
+        try:
+            abox = AnswerBox("""type='multichoice' expect="%s" options=%s""" % (expect,optionstr))
+        except Exception as err:
+            print "        ERROR creating multichoice problem %s (%s) from options=%s, expect=%s, err=%s" % (title, url_name, options, expect, err)
+            raise
+        problem.append(abox.xml)
+        if self.verbose:
+            print "              Added problem %s (%s)" % (title, url_name)
+        
+
+    def import_moodle_lesson_video(self, vert, page):
+        '''
+        Import a video page from a moodle lesson.  Use the title and contents.
+        Extract youtube ID from contents.
+        '''
+        title = page.find('.//title').text
+        title = html2text.html2text(title)
+        title = title.strip()
+        contents = page.find('.//contents').text
+        if not contents:
+            print "            Missing video in page %s, contents=%s" % (title, contents)
+            return
+        m = re.search("https*://(|www\.)youtube\.com/.*/(\w{9,11})", contents)
+        if not m:
+            print "            Missing video in page %s, contents=%s" % (title, contents)
+            return
+        ytid = m.group(2)
+        video = etree.SubElement(vert, "video")
+        url_name = self.make_url_name(title);
+        video.set("display_name", title)
+        video.set("url_name", url_name)
+        video.set('youtube_id_1_0', ytid)
+        if 0:	# future TODO: use alternate streaming video sources
+            video.set('html5_sources', '["%s"]' % ytid)
+            vsource = etree.Element('source')
+            vsource.set('src', ytid)
+            video.append(vsource)
+        if self.verbose:
+            print "              Added video %s (%s)" % (title, url_name)
 
     def import_page(self, adir, seq):
         pxml, url_name, name = self.get_moodle_page_by_dir(adir)
@@ -543,6 +719,11 @@ def CommandLine():
                       default="2014_Spring",
                       help="semester to use for edX course (no spaces)",)
 
+    parser.add_option("--skip-static",
+                      action="store_true",
+                      dest="skip_static",
+                      help="skip copying of static files (faster if this has already been done)",)
+
     (opts, args) = parser.parse_args()
 
     if len(args)<1:
@@ -555,5 +736,6 @@ def CommandLine():
     m2e = Moodle2Edx(infn, edxdir, org=opts.org, semester=opts.semester, 
                      verbose=opts.verbose,
                      clean_up_html=opts.clean_up_html,
+                     skip_static=opts.skip_static,
     )
     
