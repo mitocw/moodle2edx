@@ -12,6 +12,7 @@ import codecs
 import tempfile
 import cgi
 import html2text
+import urllib
 import lxml.html
 try:
     from path import path
@@ -266,6 +267,11 @@ class Moodle2Edx(object):
             print "  --> lesson %s (%s)" % (title,adir)
             seq, vert = self.new_sequential(chapter, title)
             self.import_moodle_lesson(adir, seq)
+
+        elif category=='assign':
+            print "  --> assign %s (%s)" % (title, adir)
+            seq, vert = self.new_sequential(chapter, title)
+            self.import_moodle_assignment(adir, seq)
     
         elif category=='quiz':
             if seq is None:		# use current sequential if exists, else create new one
@@ -494,6 +500,8 @@ class Moodle2Edx(object):
             if src.startswith('@@PLUGINFILE@@'):
                 src_fname = src.split('/', 1)[1]
                 src_fname = src_fname.replace('%20', ' ')
+                if '%' in src_fname:
+                    src_fname = urllib.unquote(src_fname)
                 xsize = int(img.get('width'))
                 ysize = int(img.get('height'))
                 match_method = 3
@@ -699,6 +707,18 @@ class Moodle2Edx(object):
         if self.verbose:
             print "              Added video %s (%s)" % (title, url_name)
         return video
+
+    def import_moodle_assignment(self, adir, seq):
+        '''
+        Moodle assignment - with submission (dummy - just html - in edX for now)
+        '''
+        pxml, url_name, name = self.get_moodle_page_by_dir(adir, "assign.xml")
+        self.setup_moodle_context_file_references(adir)
+        seq.set('display_name', name)
+        # html.set('display_name', name)
+        htmlstr = pxml.find('.//intro').text or ""
+        if htmlstr:
+            return self.save_as_html(url_name, name, htmlstr, seq)
 
     def import_page(self, adir, seq):
         pxml, url_name, name = self.get_moodle_page_by_dir(adir)
